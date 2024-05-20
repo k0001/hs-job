@@ -1,0 +1,8 @@
+profiling: False
+optimization: True
+documentation: True
+benchmarks: False
+tests: True
+test-show-details: streaming
+packages:
+  job/
