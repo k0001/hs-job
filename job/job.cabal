@@ -47,12 +47,14 @@ library
     stm,
     time,
 
--- test-suite test
---   import: basic
---   type: exitcode-stdio-1.0
---   main-is: Main.hs
---   hs-source-dirs: test
---   ghc-options: -O2 -Wall -threaded -rtsopts -with-rtsopts=-N
---   build-depends:
---     base,
---     job,
+test-suite test
+  import: basic
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  ghc-options: -O2 -Wall -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    base,
+    job,
+    resourcet,
+    time,

@@ -22,6 +22,12 @@ import Job
 
 --------------------------------------------------------------------------------
 
+keepAliveBeatMicroseconds :: Int
+keepAliveBeatMicroseconds = 5_000_000
+
+autoRescheduleDelaySeconds :: Time.NominalDiffTime
+autoRescheduleDelaySeconds = 2
+
 -- | Internal.
 data Val a = Val
    { job :: a
@@ -52,27 +58,26 @@ next' t =
       Nothing
 
 prune'
-   :: (Monoid b)
-   => (Prune a -> Maybe b)
-   -> Map.Map Id (Val a)
-   -> (b, Map.Map Id (Val a))
+   :: (Monoid a)
+   => (Prune job -> (Bool, a))
+   -> Map.Map Id (Val job)
+   -> (a, Map.Map Id (Val job))
 prune' f =
    Map.foldlWithKey
-      ( \(!bl, !m) jId v ->
-         case f (mkPrune jId v) of
-            Nothing -> (bl, Map.insert jId v m)
-            Just br -> (bl <> br, m)
+      ( \(!al, !m) jId v ->
+         let (!keep, !ar) = f (mkPrune jId v)
+         in  (al <> ar, if keep then Map.insert jId v m else m)
       )
       (mempty, mempty)
 
-queue :: A.Acquire (Queue a)
+queue :: forall job. A.Acquire (Queue job)
 queue = do
-   tmids :: TVar (Map.Map Id (Val a)) <-
+   tmids :: TVar (Map.Map Id (Val job)) <-
       R.mkAcquire1 (newTVarIO mempty) \tv ->
          -- Discard all jobs. Alive or not.
          -- TODO: Should we wait until running jobs finish?
          atomically $ writeTVar tv mempty
-   tmwait :: TVar (Map.Map Time.UTCTime (Id -> Val a -> STM ())) <-
+   tmwait :: TVar (Map.Map Time.UTCTime (Id -> Val job -> STM ())) <-
       R.mkAcquire1 (newTVarIO mempty) \tv ->
          atomically $ writeTVar tv mempty
    tactive :: TVar Bool <- R.mkAcquire1 (newTVarIO True) \tv ->
@@ -83,7 +88,13 @@ queue = do
          when (not active) do
             throwSTM $ resourceVanishedWithCallStack "Job.Memory.queue"
        pushId
-         :: Id -> Time.UTCTime -> Word32 -> Nice -> Time.UTCTime -> a -> STM ()
+         :: Id
+         -> Time.UTCTime
+         -> Word32
+         -> Nice
+         -> Time.UTCTime
+         -> job
+         -> STM ()
        pushId jId now try nice wait job = do
          throwIfVanished
          let v0 = Val{alive = Nothing, job, ..}
@@ -100,34 +111,31 @@ queue = do
             else modifyTVar' tmids $ Map.insert jId v0
    let relWork
          :: Id
+         -> Val job
          -> Time.UTCTime
          -> A.ReleaseType
          -> Maybe (Maybe (Nice, Time.UTCTime)) -- tout
          -> STM ()
-       relWork jId now rt out = do
-         m0 <- readTVar tmids
-         let (yv, !m1) = Map.updateLookupWithKey (\_ _ -> Nothing) jId m0
-         writeTVar tmids m1
-         forM_ yv \v ->
-            -- Note: We always enter this forM_
-            case out of
-               Just Nothing -> pure ()
-               Just (Just (nice, wait)) ->
-                  pushId jId now (succ v.try) nice wait v.job
-               Nothing -> case rt of
-                  A.ReleaseExceptionWith _ -> do
-                     let wait = Time.addUTCTime 2 now
-                     pushId jId now (succ v.try) v.nice wait v.job
-                  _ -> pure ()
+       relWork jId v now rt out = do
+         modifyTVar' tmids $ Map.delete jId
+         case out of
+            Just Nothing -> pure ()
+            Just (Just (nice, wait)) ->
+               pushId jId now (succ v.try) nice wait v.job
+            Nothing -> case rt of
+               A.ReleaseExceptionWith _ -> do
+                  let wait = Time.addUTCTime autoRescheduleDelaySeconds now
+                  pushId jId now (succ v.try) v.nice wait v.job
+               _ -> pure ()
    pure
       Queue
-         { push = \nice wait job -> liftIO do
+         { push = \nice wait job -> do
             jId <- newId
             now <- Time.getCurrentTime
             atomically $ pushId jId now 0 nice wait job
             pure jId
          , ---------
-           prune = \f -> liftIO $ atomically do
+           prune = \f -> atomically do
             readTVar tactive >>= \case
                False -> pure mempty -- It's alright to “fail silently”
                True -> do
@@ -144,52 +152,54 @@ queue = do
             -- returns a 'STM' action that will block until 'Work' is available.
             -- In both cases, the corresponding 'Val' was marked as being alive
             -- by the time we get our hands on the 'Work'.
-            ew :: Either (STM (Id, Val a)) (Id, Val a) <- fmap (first fst) do
-               R.mkAcquireType1
-                  ( do
-                     now <- Time.getCurrentTime
-                     atomically do
-                        throwIfVanished
-                        mwait0 <- readTVar tmwait
-                        yw <- case Map.null mwait0 of
-                           False -> pure Nothing
-                           True -> do
-                              mids <- readTVar tmids
-                              forM (next' now mids) \(jId, Val{..}) -> do
-                                 let v = Val{alive = Just now, ..}
-                                 modifyTVar' tmids $ Map.insert jId v
-                                 pure (jId, v)
-                        case yw of
-                           Just w -> pure $ Right w
-                           Nothing -> do
-                              t :: TMVar (Id, Val a) <- newEmptyTMVar
-                              modifyTVar' tmwait $ Map.insert now (curry $ putTMVar t)
-                              pure $
-                                 Left
-                                    ( throwIfVanished >> takeTMVar t
-                                    , modifyTVar' tmwait $ Map.delete now
-                                    )
-                  )
-                  ( \ew rt -> case ew of
-                     Left (_, r) -> atomically r
-                     Right (jId, _) -> do
+            ew :: Either (STM (Id, Val job)) (Id, Val job) <-
+               fmap (first fst) do
+                  R.mkAcquireType1
+                     ( do
                         now <- Time.getCurrentTime
-                        atomically $ relWork jId now rt =<< readTVar tout
-                  )
+                        atomically do
+                           throwIfVanished
+                           mwait0 <- readTVar tmwait
+                           yw <- case Map.null mwait0 of
+                              False -> pure Nothing
+                              True -> do
+                                 mids <- readTVar tmids
+                                 forM (next' now mids) \(jId, Val{..}) -> do
+                                    let v = Val{alive = Just now, ..}
+                                    modifyTVar' tmids $ Map.insert jId v
+                                    pure (jId, v)
+                           case yw of
+                              Just w -> pure $ Right w
+                              Nothing -> do
+                                 t :: TMVar (Id, Val a) <- newEmptyTMVar
+                                 modifyTVar' tmwait $
+                                    Map.insert now (curry $ putTMVar t)
+                                 pure $
+                                    Left
+                                       ( throwIfVanished >> takeTMVar t
+                                       , modifyTVar' tmwait $ Map.delete now
+                                       )
+                     )
+                     ( \ew rt -> case ew of
+                        Left (_, r) -> atomically r
+                        Right (jId, v) -> do
+                           now <- Time.getCurrentTime
+                           atomically $ relWork jId v now rt =<< readTVar tout
+                     )
             -- If we didn't manage to immediately get 'Work' on the last step,
             -- then block here waiting and set up the corresponding release.
-            (jId :: Id, v :: Val a) <- case ew of
+            (jId :: Id, v :: Val job) <- case ew of
                Right x -> pure x
-               Left sx -> R.mkAcquireType1 (atomically sx) \(jId, _) rt -> do
+               Left sx -> R.mkAcquireType1 (atomically sx) \(jId, v) rt -> do
                   now <- Time.getCurrentTime
-                  atomically $ relWork jId now rt =<< readTVar tout
+                  atomically $ relWork jId v now rt =<< readTVar tout
             -- While the 'Work' is alive, send heartbeats every 5 seconds.
-            _keepalive :: ThreadId <-
+            _keepAlive :: ThreadId <-
                R.mkAcquire1
                   ( -- This code runs with exceptions masked because of mkAcquire1.
                     -- TODO: Stop if not 'tactive'.
                     forkIO $ forever $ Ex.tryAny do
-                     threadDelay 5_000_000 -- 5 seconds
+                     threadDelay keepAliveBeatMicroseconds
                      now <- Time.getCurrentTime
                      atomically do
                         modifyTVar' tmids $
@@ -200,8 +210,8 @@ queue = do
                Work
                   { id = jId
                   , retry = \n w ->
-                     liftIO $ atomically $ writeTVar tout $ Just (Just (n, w))
-                  , finish = liftIO $ atomically $ writeTVar tout $ Just Nothing
+                     atomically $ writeTVar tout $ Just (Just (n, w))
+                  , finish = atomically $ writeTVar tout $ Just Nothing
                   , job = v.job
                   , try = v.try
                   , nice = v.nice

@@ -11,9 +11,18 @@ module Job
    , idFromUUID7
    , newId
 
-    -- * Job
-   , Work (..)
+    -- * Queue
    , Queue (..)
+   , push
+   , pull
+   , prune
+
+    -- * Work
+   , Work (..)
+   , retry
+   , finish
+
+    -- * Prune
    , Prune (..)
    ) where
 
@@ -68,6 +77,10 @@ newId = UnsafeId <$> UUID7.genUUID
 
 --------------------------------------------------------------------------------
 
+-- | A @job@ together with its 'Queue' execution context details.
+--
+-- As soon as you get your hands on a 'Work', which you do through 'pull',
+-- start working on it right away.
 data Work job = Work
    { id :: Id
    -- ^ Unique identifier for the scheduled @job@ (and re-scheduled @job@, see
@@ -81,7 +94,7 @@ data Work job = Work
    , wait :: Time.UTCTime
    -- ^ Time until the 'Queue' was supposed to wait before considering
    -- working on the @job@.
-   , retry :: forall m. (MonadIO m) => Nice -> Time.UTCTime -> m ()
+   , retry :: Nice -> Time.UTCTime -> IO ()
    -- ^ Once this 'Work' is released, reschedule to be executed at the
    -- specified 'Time.UTCTime' at the earliest.
    --
@@ -92,7 +105,7 @@ data Work job = Work
    -- 'finish'    '>>' 'retry' n t  ==  'retry' n t
    -- 'retry' n t '>>' 'finish'     ==  'finish'
    -- @
-   , finish :: forall m. (MonadIO m) => m ()
+   , finish :: IO ()
    -- ^ Once this 'Work' is released, remove it from the execution queue.
    --
    -- See the documentation for 'Queue'\'s 'pull'.
@@ -105,6 +118,26 @@ data Work job = Work
    }
    deriving stock (Functor)
 
+-- | Like the 'retry' field in 'Work', except with a bit more
+-- polymorphic type and intended to be used as a top-level function.
+retry
+   :: forall job m
+    . (MonadIO m)
+   => Work job
+   -> Nice
+   -> Time.UTCTime
+   -> m ()
+retry Work{retry = f} n t = liftIO $ f n t
+
+-- | Like the 'finish' field in 'Work', except with a bit more
+-- polymorphic type and intended to be used as a top-level function.
+finish
+   :: forall job m
+    . (MonadIO m)
+   => Work job
+   -> m ()
+finish Work{finish = m} = liftIO m
+
 -- | A @job@ 'Queue'.
 --
 -- * @job@s can be 'push'ed to the 'Queue' for eventual execution, 'pull'ed
@@ -116,13 +149,7 @@ data Work job = Work
 --
 -- * Other backends are expected to provide a 'Queue' implementation.
 data Queue job = Queue
-   { push
-      :: forall m
-       . (MonadIO m)
-      => Nice
-      -> Time.UTCTime
-      -> job
-      -> m Id
+   { push :: Nice -> Time.UTCTime -> job -> IO Id
    -- ^ Push new @job@ to the queue so to be executed after the specified
    -- 'Time.UTCTime', which may be in the past.
    , pull :: A.Acquire (Work job)
@@ -137,15 +164,41 @@ data Queue job = Queue
    -- * On 'A.ReleaseNormal' or 'A.ReleaseEarly', the @job@ is automatically
    -- removed from the 'Queue'. This behavior can be overriden
    -- by using 'Work'\'s 'retry' or 'finish'.
-   , prune
-      :: forall b m
-       . (Monoid b, MonadIO m)
-      => (Prune job -> Maybe b)
-      -> m b
-   -- ^ Remove from the 'Queue' those @job@s for which the given function
-   -- returns 'Just'. Allows collecting some additional output in @b@.
-   -- The given @job@s are in no particular order.
+   , prune :: forall a. (Monoid a) => (Prune job -> (Bool, a)) -> IO a
+   -- ^ Prune @job@s from the 'Queue', keeping only those for which the given
+   -- function returns 'True' (like 'List.filter'). Allows collecting some
+   -- additional 'Monoid'al output.  The given @job@s are in no particular
+   -- order. __IMPORTANT:__ If you remove a @job@ that is currently active,
+   -- it might be 'push'ed back to the 'Queue' later if required by 'retry'
+   -- or a 'Work' exception.
    }
+
+-- | Like the 'push' field in 'Queue', except with a bit more polymorphic type
+-- and intended to be used as a top-level function.
+push
+   :: forall job m
+    . (MonadIO m)
+   => Queue job
+   -> Nice
+   -> Time.UTCTime
+   -> job
+   -> m Id
+push Queue{push = f} n t j = liftIO $ f n t j
+
+-- | Like the 'pull' field in 'Queue', except intended to to be used as a
+-- top-level function.
+pull :: forall job. Queue job -> A.Acquire (Work job)
+pull Queue{pull = a} = a
+
+-- | Like the 'prune' field in 'Queue', except with a bit more polymorphic type
+-- and intended to be used as a top-level function.
+prune
+   :: forall job a m
+    . (Monoid a, MonadIO m)
+   => Queue job
+   -> (Prune job -> (Bool, a))
+   -> m a
+prune Queue{prune = f} g = liftIO $ f g
 
 -- | Wrapper for all the @job@-related data accessible through 'Queue'\'s
 -- 'prune' function.

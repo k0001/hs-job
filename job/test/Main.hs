@@ -1,21 +1,30 @@
 module Main (main) where
 
-import Df1 qualified
-import Di qualified
-import Di.Core qualified
-import Test.Tasty qualified as Tasty
-import Test.Tasty.Hedgehog qualified as Tasty
-import Test.Tasty.Runners qualified as Tasty
+import Data.Acquire qualified as A
+import Data.Time qualified as Time
+import Job qualified
+import Job.Memory qualified
 
 --------------------------------------------------------------------------------
 
 main :: IO ()
-main = Tasty.defaultMainWithIngredients
-      [ Tasty.consoleTestReporter
-      , Tasty.listingTests
-      ]
-      $ Tasty.localOption (Tasty.HedgehogTestLimit (Just 1000))
-      $ tt
+main = A.withAcquire (Job.Memory.queue @String) \q -> do
+   t0 <- Time.getCurrentTime
 
-tt :: Tasty.TestTree
-tt = undefined
+   [] <- Job.prune q \p -> (False, [p])
+
+   i0 <- Job.push q (Job.Nice 0) t0 "j0"
+   [x0] <- Job.prune q \p -> (False, [p])
+   True <- pure $ x0.id == i0
+   True <- pure $ x0.job == "j0"
+   [] <- Job.prune q \p -> (False, [p])
+
+   i1 <- Job.push q (Job.Nice 0) t0 "j1"
+   [x1] <- Job.prune q \p -> (True, [p])
+   True <- pure $ x1.id == i1
+   True <- pure $ x1.job == "j1"
+   [x2] <- Job.prune q \p -> (True, [p])
+   True <- pure $ x2.id == i1
+   True <- pure $ x2.job == "j1"
+
+   pure ()

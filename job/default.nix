@@ -9,6 +9,7 @@ mkDerivation {
     base containers mmzk-typeid resourcet resourcet-extra
     safe-exceptions stm time
   ];
+  testHaskellDepends = [ base resourcet time ];
   homepage = "https://github.com/k0001/hs-job";
   description = "Job queue";
   license = lib.licenses.asl20;
