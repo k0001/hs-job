@@ -4,6 +4,7 @@
 module Job
    ( -- * Nice
     Nice (..)
+   , nice0
 
     -- * Id
    , Id
@@ -14,7 +15,6 @@ module Job
     -- * Queue
    , Queue (..)
    , push
-   , pull
    , prune
 
     -- * Work
@@ -49,9 +49,12 @@ import GHC.Stack
 -- will have less priority over other jobs, and possibly allow competing jobs
 -- to take more resources.
 --
--- * Use @0@ as default 'Nice' value.
+-- * Use 'nice0' (i.e,. @'Nice' 0@) as default 'Nice' value.
 newtype Nice = Nice {int32 :: Int32}
    deriving newtype (Eq, Ord, Show, Enum, Bounded)
+
+nice0 :: Nice
+nice0 = Nice 0
 
 --------------------------------------------------------------------------------
 
@@ -101,7 +104,7 @@ data Work job = Work
    -- See the documentation for 'Queue'\'s 'pull'.
    --
    -- @
-   -- 'retry' _ _ '>>' 'retry' n t  ==  'retry' n2 t2
+   -- 'retry' _ _ '>>' 'retry' n t  ==  'retry' n t
    -- 'finish'    '>>' 'retry' n t  ==  'retry' n t
    -- 'retry' n t '>>' 'finish'     ==  'finish'
    -- @
@@ -184,11 +187,6 @@ push
    -> job
    -> m Id
 push Queue{push = f} n t j = liftIO $ f n t j
-
--- | Like the 'pull' field in 'Queue', except intended to to be used as a
--- top-level function.
-pull :: forall job. Queue job -> A.Acquire (Work job)
-pull Queue{pull = a} = a
 
 -- | Like the 'prune' field in 'Queue', except with a bit more polymorphic type
 -- and intended to be used as a top-level function.

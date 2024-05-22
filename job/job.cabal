@@ -27,6 +27,7 @@ common basic
     DerivingStrategies
     DuplicateRecordFields
     LambdaCase
+    MultiWayIf
     OverloadedRecordDot
     RecordWildCards
     RoleAnnotations
