@@ -114,8 +114,8 @@ queue = do
    -- tactive: Whether the 'Queue' is still active (i.e., not vanished).
    tactive :: TVar Bool <- R.mkAcquire1 (newTVarIO True) \tv ->
       atomically $ writeTVar tv False
-   let throwIfInactive :: STM ()
-       throwIfInactive = do
+   let ensureActive :: STM ()
+       ensureActive = do
          active <- readTVar tactive
          when (not active) do
             throwSTM $ resourceVanishedWithCallStack "Job.Memory.queue"
@@ -125,7 +125,7 @@ queue = do
             jId <- newId
             t0 <- Time.getCurrentTime
             join $ atomically do
-               throwIfInactive
+               ensureActive
                let v = Val{alive = Nothing, try = 0, nice, wait, job}
                modifyTVar' tjobs $ Map.insert jId v
                if wait <= t0
@@ -139,7 +139,7 @@ queue = do
             pure jId
          , ---------
            prune = \f -> atomically do
-            throwIfInactive
+            ensureActive
             readTVar tactive >>= \case
                False -> pure mempty -- It's alright to “fail silently”
                True -> do
@@ -157,12 +157,12 @@ queue = do
             gjob :: STM (Id, Val job) <- fmap snd do
                R.mkAcquire1
                   ( atomically do
-                     throwIfInactive
+                     ensureActive
                      work0 <- readTVar twork
                      let k = succ $ maybe minBound fst $ IntMap.lookupMax work0
                      t <- newEmptyTMVar
                      writeTVar twork $ IntMap.insert k (putTMVar t) work0
-                     pure (k, throwIfInactive >> takeTMVar t)
+                     pure (k, ensureActive >> takeTMVar t)
                   )
                   (atomically . modifyTVar' twork . IntMap.delete . fst)
             -- tout: If 'finish' is called, then @'Just' 'Nothing'@, if
@@ -173,7 +173,7 @@ queue = do
                R.mkAcquireType1
                   ( do
                      now <- Time.getCurrentTime
-                     atomically $ throwIfInactive >> shift now
+                     atomically $ ensureActive >> shift now
                      atomically $ gjob
                   )
                   \(jId, v) rt -> do
@@ -182,13 +182,13 @@ queue = do
                         out <- readTVar tout
                         if
                            | Just (Just (nice, wait)) <- out -> do
-                              throwIfInactive
+                              ensureActive
                               let Val{job} = v
                                   alive = Nothing
                                   try = succ v.try
                               modifyTVar' tjobs $ Map.insert jId Val{..}
                            | A.ReleaseExceptionWith _ <- rt -> do
-                              throwIfInactive
+                              ensureActive
                               let Val{job, nice} = v
                                   alive = Nothing
                                   try = succ v.try
