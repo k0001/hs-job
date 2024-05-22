@@ -147,6 +147,11 @@ queue = do
                   writeTVar tjobs m
                   pure b
          , ---------
+           ready = do
+            now <- Time.getCurrentTime
+            jobs <- readTVarIO tjobs
+            pure $ isJust $ next' now jobs
+         , ---------
            pull = do
             -- gjob: Will block until a job is ready for being worked on.
             gjob :: STM (Id, Val job) <- fmap snd do
@@ -193,11 +198,18 @@ queue = do
             -- While working on this job, send heartbeats
             void do
                R.mkAcquire1
-                  ( forkIO $ forever $ Ex.tryAny do
-                     threadDelay keepAliveBeatMicroseconds
-                     now <- Time.getCurrentTime
-                     let v1 = case v of Val{..} -> Val{alive = Just now, ..}
-                     atomically $ modifyTVar' tjobs $ Map.insert jId v1
+                  ( forkIO $ fix \again -> do
+                     eactive <- Ex.tryAny do
+                        threadDelay keepAliveBeatMicroseconds
+                        now <- Time.getCurrentTime
+                        let v1 = case v of Val{..} -> Val{alive = Just now, ..}
+                        atomically do
+                           a <- readTVar tactive
+                           when a $ modifyTVar' tjobs $ Map.insert jId v1
+                           pure a
+                     case eactive of
+                        Right False -> pure ()
+                        _ -> again
                   )
                   (Ex.uninterruptibleMask_ . killThread)
             pure

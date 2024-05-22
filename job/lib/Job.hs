@@ -167,6 +167,10 @@ data Queue job = Queue
    -- * On 'A.ReleaseNormal' or 'A.ReleaseEarly', the @job@ is automatically
    -- removed from the 'Queue'. This behavior can be overriden
    -- by using 'Work'\'s 'retry' or 'finish'.
+   , ready :: IO Bool
+   -- ^ Returns immediately whether there is any @job@ waiting and ready to be
+   -- 'Work'ed on right away. In other words, 'ready' returns 'True' in those
+   -- cases where 'pull' would acquire 'Work' right away.
    , prune :: forall a. (Monoid a) => (Prune job -> (Bool, a)) -> IO a
    -- ^ Prune @job@s from the 'Queue', keeping only those for which the given
    -- function returns 'True' (like 'List.filter'). Allows collecting some
