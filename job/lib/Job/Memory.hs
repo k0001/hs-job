@@ -27,8 +27,8 @@ import Job
 keepAliveBeatMicroseconds :: Int
 keepAliveBeatMicroseconds = 5_000_000
 
-autoRescheduleDelaySeconds :: Time.NominalDiffTime
-autoRescheduleDelaySeconds = 2
+autoRetryDelaySeconds :: Time.NominalDiffTime
+autoRetryDelaySeconds = 2
 
 -- | Internal.
 data Val a = Val
@@ -38,9 +38,6 @@ data Val a = Val
    , wait :: Time.UTCTime
    , alive :: Maybe Time.UTCTime
    }
-
-mkPrune :: Id -> Val a -> Prune a
-mkPrune jId Val{..} = Prune{id = jId, ..}
 
 -- | Get the next 'Work'able 'Val' starting at or after the given time, if any.
 next' :: Time.UTCTime -> Map.Map Id (Val a) -> Maybe (Id, Val a)
@@ -66,8 +63,8 @@ prune'
    -> (a, Map.Map Id (Val job))
 prune' f =
    Map.foldlWithKey
-      ( \(!al, !m) jId v ->
-         let (!keep, !ar) = f (mkPrune jId v)
+      ( \(!al, !m) jId v@Val{..} ->
+         let (!keep, !ar) = f Prune{id = jId, ..}
          in  (al <> ar, if keep then Map.insert jId v m else m)
       )
       (mempty, mempty)
@@ -192,7 +189,7 @@ queue = do
                               let Val{job, nice} = v
                                   alive = Nothing
                                   try = succ v.try
-                                  wait = Time.addUTCTime autoRescheduleDelaySeconds now
+                                  wait = Time.addUTCTime autoRetryDelaySeconds now
                               modifyTVar' tjobs $ Map.insert jId Val{..}
                            | otherwise -> modifyTVar' tjobs $ Map.delete jId
             -- While working on this job, send heartbeats
