@@ -175,23 +175,25 @@ queue = do
                   )
                   \(jId, v) rt -> do
                      now <- Time.getCurrentTime
-                     atomically do
-                        out <- readTVar tout
-                        if
-                           | Just (Just (nice, wait)) <- out -> do
-                              ensureActive
-                              let Val{job} = v
-                                  alive = Nothing
-                                  try = succ v.try
-                              modifyTVar' tjobs $ Map.insert jId Val{..}
-                           | A.ReleaseExceptionWith _ <- rt -> do
+                     atomically $
+                        readTVar tout >>= \case
+                           -- no 'retry', and no 'finish', and release with exception.
+                           Nothing | A.ReleaseExceptionWith _ <- rt -> do
                               ensureActive
                               let Val{job, nice} = v
                                   alive = Nothing
                                   try = succ v.try
                                   wait = Time.addUTCTime autoRetryDelaySeconds now
                               modifyTVar' tjobs $ Map.insert jId Val{..}
-                           | otherwise -> modifyTVar' tjobs $ Map.delete jId
+                           -- explicit 'retry'.
+                           Just (Just (nice, wait)) -> do
+                              ensureActive
+                              let Val{job} = v
+                                  alive = Nothing
+                                  try = succ v.try
+                              modifyTVar' tjobs $ Map.insert jId Val{..}
+                           -- explicit 'finish', or release without exception.
+                           _ -> modifyTVar' tjobs $ Map.delete jId
             -- While working on this job, send heartbeats
             void do
                R.mkAcquire1
