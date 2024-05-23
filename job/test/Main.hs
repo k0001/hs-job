@@ -5,132 +5,158 @@ module Main (main) where
 import Control.Exception qualified as Ex
 import Control.Monad
 import Data.Acquire qualified as A
+import Data.List qualified as List
 import Data.Time qualified as Time
 import Job
 import Job.Memory qualified
 
 --------------------------------------------------------------------------------
 
+infix 4 ==.
+(==.) :: (Eq a, Show a) => a -> a -> IO ()
+(==.) l r =
+   if l == r
+      then mempty
+      else fail $ (showsPrec 11 l . showString " /= " . showsPrec 11 r) ""
+
+infix 4 >.
+(>.) :: (Ord a, Show a) => a -> a -> IO ()
+(>.) l r =
+   if l > r
+      then mempty
+      else fail $ (showsPrec 11 l . showString " <= " . showsPrec 11 r) ""
+
 main :: IO ()
 main = A.withAcquire (Job.Memory.queue @String) \q -> do
    t0 <- Time.getCurrentTime
 
    putStrLn "a"
-   [] <- prune q \p -> (False, [p])
+   [] <- prune q \i m j -> (False, [(i, m, j)])
 
    putStrLn "b"
    i0 <- push q nice0 t0 "j0"
-   [x0] <- prune q \p -> (False, [p])
-   True <- pure $ x0.id == i0
-   True <- pure $ x0.job == "j0"
-   True <- pure $ x0.nice == nice0
-   True <- pure $ x0.wait == t0
-   True <- pure $ x0.try == 0
-   True <- pure $ x0.alive == Nothing
-   [] <- prune q \p -> (False, [p])
+   [(x0i, x0m, x0j)] <- prune q \i m j -> (False, [(i, m, j)])
+   x0i ==. i0
+   x0j ==. "j0"
+   x0m.nice ==. nice0
+   x0m.wait ==. t0
+   x0m.try ==. 0
+   x0m.alive ==. Nothing
+   [] <- prune q \i m j -> (False, [(i, m, j)])
 
    putStrLn "c"
    i1 <- push q nice0 t0 "j1"
-   [x1] <- prune q \p -> (True, [p])
-   True <- pure $ x1.id == i1
-   True <- pure $ x1.job == "j1"
-   True <- pure $ x1.nice == nice0
-   True <- pure $ x1.wait == t0
-   True <- pure $ x1.try == 0
-   True <- pure $ x1.alive == Nothing
+   [(x1i, x1m, x1j)] <- prune q \i m j -> (True, [(i, m, j)])
+   x1i ==. i1
+   x1j ==. "j1"
+   x1m.nice ==. nice0
+   x1m.wait ==. t0
+   x1m.try ==. 0
+   x1m.alive ==. Nothing
 
    putStrLn "d"
-   [x2] <- prune q \p -> (True, [p])
-   True <- pure $ x2.id == i1
-   True <- pure $ x2.job == "j1"
-   True <- pure $ x2.nice == nice0
-   True <- pure $ x2.wait == t0
-   True <- pure $ x2.try == 0
-   True <- pure $ x2.alive == Nothing
+   [(x2i, x2m, x2j)] <- prune q \i m j -> (True, [(i, m, j)])
+   x2i ==. i1
+   x2j ==. "j1"
+   x2m.nice ==. nice0
+   x2m.wait ==. t0
+   x2m.try ==. 0
+   x2m.alive ==. Nothing
 
    putStrLn "e"
    t1 <- Time.getCurrentTime
    A.withAcquire q.pull \w -> do
       putStrLn "e'"
-      True <- pure $ w.id == i1
-      True <- pure $ w.job == "j1"
-      True <- pure $ w.nice == nice0
-      True <- pure $ w.wait == t0
-      True <- pure $ w.try == 0
+      w.id ==. i1
+      w.job ==. "j1"
+      w.meta.nice ==. nice0
+      w.meta.wait ==. t0
+      w.meta.try ==. 0
       retry w (Nice 1) t1
 
    putStrLn "f"
-   [x3] <- prune q \p -> (True, [p])
-   True <- pure $ x3.id == i1
-   True <- pure $ x3.job == "j1"
-   True <- pure $ x3.nice == Nice 1
-   True <- pure $ x3.wait == t1
-   True <- pure $ x3.try == 1
-   True <- pure $ x3.alive == Nothing
+   [(x3i, x3m, x3j)] <- prune q \i m j -> (True, [(i, m, j)])
+   x3i ==. i1
+   x3j ==. "j1"
+   x3m.nice ==. Nice 1
+   x3m.wait ==. t1
+   x3m.try ==. 1
+   x3m.alive ==. Nothing
 
    putStrLn "g"
    A.withAcquire q.pull \w -> do
       putStrLn "g'"
-      True <- pure $ w.id == i1
-      True <- pure $ w.job == "j1"
-      True <- pure $ w.nice == Nice 1
-      True <- pure $ w.wait == t1
-      True <- pure $ w.try == 1
+      w.id ==. i1
+      w.job ==. "j1"
+      w.meta.nice ==. Nice 1
+      w.meta.wait ==. t1
+      w.meta.try ==. 1
       retry w (Nice 1) t1
 
    putStrLn "h"
-   [x4] <- prune q \p -> (True, [p])
-   True <- pure $ x4.id == i1
-   True <- pure $ x4.job == "j1"
-   True <- pure $ x4.nice == Nice 1
-   True <- pure $ x4.wait == t1
-   True <- pure $ x4.try == 2
-   True <- pure $ x4.alive == Nothing
+   [(x4i, x4m, x4j)] <- prune q \i m j -> (True, [(i, m, j)])
+   x4i ==. i1
+   x4j ==. "j1"
+   x4m.nice ==. Nice 1
+   x4m.wait ==. t1
+   x4m.try ==. 2
+   x4m.alive ==. Nothing
 
    putStrLn "i"
    A.withAcquire q.pull \w -> do
       putStrLn "i'"
-      True <- pure $ w.id == i1
-      True <- pure $ w.job == "j1"
-      True <- pure $ w.nice == Nice 1
-      True <- pure $ w.wait == t1
-      True <- pure $ w.try == 2
+      w.id ==. i1
+      w.job ==. "j1"
+      w.meta.nice ==. Nice 1
+      w.meta.wait ==. t1
+      w.meta.try ==. 2
       pure ()
 
    putStrLn "j"
-   [] <- prune q \p -> (True, [p])
+   [] <- prune q \i m j -> (True, [(i, m, j)])
    t2 <- Time.addUTCTime 0.3 <$> Time.getCurrentTime
    i2 <- push q nice0 t2 "j2"
-   [x5] <- prune q \p -> (True, [p])
-   True <- pure $ x5.id == i2
-   True <- pure $ x5.job == "j2"
-   True <- pure $ x5.nice == nice0
-   True <- pure $ x5.wait == t2
-   True <- pure $ x5.try == 0
-   True <- pure $ x5.alive == Nothing
+   [(x5i, x5m, x5j)] <- prune q \i m j -> (True, [(i, m, j)])
+   x5i ==. i2
+   x5j ==. "j2"
+   x5m.nice ==. nice0
+   x5m.wait ==. t2
+   x5m.try ==. 0
+   x5m.alive ==. Nothing
 
    putStrLn "k"
    Ex.handle (\case Err 1 -> pure ()) do
       A.withAcquire q.pull \w -> do
          putStrLn "k'"
-         True <- pure $ w.id == i2
-         True <- pure $ w.job == "j2"
-         True <- pure $ w.nice == nice0
-         True <- pure $ w.wait == t2
-         True <- pure $ w.try == 0
+         w.id ==. i2
+         w.job ==. "j2"
+         w.meta.nice ==. nice0
+         w.meta.wait ==. t2
+         w.meta.try ==. 0
          void $ Ex.throwIO $ Err 1
 
    putStrLn "h"
-   [x6] <- prune q \p -> (True, [p])
-   True <- pure $ x6.id == i2
-   True <- pure $ x6.job == "j2"
-   True <- pure $ x6.nice == nice0
-   True <- pure $ x6.wait > t2
-   True <- pure $ x6.try == 1
-   True <- pure $ x6.alive == Nothing
+   [(x6i, x6m, x6j)] <- prune q \i m j -> (True, [(i, m, j)])
+   x6i ==. i2
+   x6j ==. "j2"
+   x6m.nice ==. nice0
+   x6m.wait >. t2
+   x6m.try ==. 1
+   x6m.alive ==. Nothing
 
    putStrLn "i"
-   pure ()
+   i3 <- push q nice0 t0 "j3"
+   i4 <- push q (pred nice0) t1 "j4"
+   i5 <- push q nice0 t0 "j5"
+   jIds0 <- prune q \i _ _ -> (True, [i])
+   jIds0 ==. [i4, i3, i5, i2]
+
+   putStrLn "j"
+   forM_ (zip jIds0 (List.drop 1 (List.tails jIds0))) \(jId, tl) ->
+      A.withAcquire q.pull \w -> do
+         w.id ==. jId
+         jIds1 <- prune q \i _ _ -> (True, [i])
+         jIds1 ==. tl <> [jId]
 
 data Err = Err Int
    deriving stock (Eq, Show)

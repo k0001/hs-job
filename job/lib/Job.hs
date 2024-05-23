@@ -2,18 +2,8 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
 module Job
-   ( -- * Nice
-    Nice (..)
-   , nice0
-
-    -- * Id
-   , Id
-   , unsafeIdFromUUID7
-   , idFromUUID7
-   , newId
-
-    -- * Queue
-   , Queue (..)
+   ( -- * Queue
+    Queue (..)
    , push
    , prune
 
@@ -22,8 +12,18 @@ module Job
    , retry
    , finish
 
-    -- * Prune
-   , Prune (..)
+    -- * Meta
+   , Meta (..)
+
+    -- * Id
+   , Id
+   , unsafeIdFromUUID7
+   , idFromUUID7
+   , newId
+
+    -- * Nice
+   , Nice (..)
+   , nice0
    ) where
 
 import Control.Monad
@@ -53,6 +53,7 @@ import GHC.Stack
 newtype Nice = Nice {int32 :: Int32}
    deriving newtype (Eq, Ord, Show, Enum, Bounded)
 
+-- | @'nice0' = 'Nice' 0@
 nice0 :: Nice
 nice0 = Nice 0
 
@@ -90,13 +91,8 @@ data Work job = Work
    -- 'pull' and 'retry').
    , job :: job
    -- ^ The actual @job@ to be carried out.
-   , try :: Word32
-   -- ^ How many tries have been attempted already (excluding the current one).
-   , nice :: Nice
-   -- ^ 'Nice' value used while scheduling the @job@.
-   , wait :: Time.UTCTime
-   -- ^ Time until the 'Queue' was supposed to wait before considering
-   -- working on the @job@.
+   , meta :: Meta
+   -- ^ 'Meta'data accompanying the @job@ being performed.
    , retry :: Nice -> Time.UTCTime -> IO ()
    -- ^ Once this 'Work' is released, reschedule to be executed at the
    -- specified 'Time.UTCTime' at the earliest.
@@ -171,7 +167,7 @@ data Queue job = Queue
    -- ^ Returns immediately whether there is any @job@ waiting and ready to be
    -- 'Work'ed on right away. In other words, 'ready' returns 'True' in those
    -- cases where 'pull' would acquire 'Work' right away.
-   , prune :: forall a. (Monoid a) => (Prune job -> (Bool, a)) -> IO a
+   , prune :: forall a. (Monoid a) => (Id -> Meta -> job -> (Bool, a)) -> IO a
    -- ^ Prune @job@s from the 'Queue', keeping only those for which the given
    -- function returns 'True' (like 'List.filter'). Allows collecting some
    -- additional 'Monoid'al output.  The given @job@s are in no particular
@@ -198,28 +194,28 @@ prune
    :: forall job a m
     . (Monoid a, MonadIO m)
    => Queue job
-   -> (Prune job -> (Bool, a))
+   -> (Id -> Meta -> job -> (Bool, a))
    -> m a
 prune Queue{prune = f} g = liftIO $ f g
 
 -- | Wrapper for all the @job@-related data accessible through 'Queue'\'s
 -- 'prune' function.
-data Prune job = Prune
-   { id :: Id
-   -- ^ Unique identifier for the scheduled @job@ (and re-scheduled @job@, see
-   -- 'pull' and 'retry').
-   , job :: job
-   -- ^ The actual @job@ to be carried out.
-   , try :: Word32
-   -- ^ How many tries have been attempted already (excluding the current
-   -- one, in case 'alive' is 'Just').
+data Meta = Meta
+   { alive :: Maybe Time.UTCTime
+   -- ^ If 'Just', the @job@ is currently being 'Work'ed on, allegedly. The
+   -- last time the @job@ sent a heartbeat is attached.
    , nice :: Nice
    -- ^ 'Nice' value used while scheduling the @job@.
    , wait :: Time.UTCTime
    -- ^ Time until the 'Queue' is or was supposed to wait before considering
    -- working on the @job@.
-   , alive :: Maybe Time.UTCTime
-   -- ^ If 'Just', the @job@ is currently being 'Work'ed on, allegedly. The
-   -- last time the @job@ sent a heartbeat is attached.
+   , try :: Word32
+   -- ^ How many tries have been attempted already (excluding the current
+   -- one, in case 'alive' is 'Just').
    }
-   deriving (Eq, Ord, Show)
+   deriving
+      ( Eq
+      , Ord
+        -- ^ Order compatible with the one in 'prune'.
+      , Show
+      )

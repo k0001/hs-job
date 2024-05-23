@@ -11,12 +11,12 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Resource.Extra qualified as R
 import Data.Acquire qualified as A
 import Data.Fixed
+import Data.Foldable
 import Data.Function
-import Data.IntMap.Strict qualified as IntMap
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe
 import Data.Time qualified as Time
-import Data.Word
 import GHC.IO.Exception
 import GHC.Stack
 
@@ -30,82 +30,85 @@ keepAliveBeatMicroseconds = 5_000_000
 autoRetryDelaySeconds :: Time.NominalDiffTime
 autoRetryDelaySeconds = 2
 
--- | Internal.
-data Val a = Val
-   { job :: a
-   , try :: Word32
-   , nice :: Nice
-   , wait :: Time.UTCTime
-   , alive :: Maybe Time.UTCTime
-   }
-
--- | Get the next 'Work'able 'Val' starting at or after the given time, if any.
-next' :: Time.UTCTime -> Map.Map Id (Val a) -> Maybe (Id, Val a)
+-- | Get the next 'Work'able starting at or after the given time, if any.
+next' :: Time.UTCTime -> Map.Map Id (Meta, job) -> Maybe (Id, Meta, job)
 next' t =
-   Map.foldlWithKey
-      ( \yo jId v ->
-         if isNothing v.alive && v.wait <= t
-            then case yo of
-               Just (_, ov)
-                  | ov.nice <= v.nice
-                  , ov.try <= v.try
-                  , ov.wait <= v.wait ->
-                     yo
-               _ -> Just (jId, v)
-            else yo
+   listToMaybe . snd . prune' \jId meta job ->
+      ( False
+      , case meta.alive of
+         Nothing | meta.wait <= t -> [(jId, meta, job)]
+         _ -> []
       )
-      Nothing
 
+-- prune' :: (Id -> Meta -> job -> Writer a Bool)
+--        -> Map Id (Meta, job)
+--        -> Writer a (Map Id (Meta, job))
 prune'
    :: (Monoid a)
-   => (Prune job -> (Bool, a))
-   -> Map.Map Id (Val job)
-   -> (a, Map.Map Id (Val job))
+   => (Id -> Meta -> job -> (Bool, a))
+   -> Map.Map Id (Meta, job)
+   -> (Map.Map Id (Meta, job), a)
 prune' f =
-   Map.foldlWithKey
-      ( \(!al, !m) jId v@Val{..} ->
-         let (!keep, !ar) = f Prune{id = jId, ..}
-         in  (al <> ar, if keep then Map.insert jId v m else m)
+   foldl'
+      ( \(!m, !al) (jId, (meta, job)) ->
+         let (keep, ar) = f jId meta job
+         in  (if keep then Map.insert jId (meta, job) m else m, al <> ar)
       )
-      (mempty, mempty)
+      mempty
+      . List.sortOn (\(jId, (meta, _)) -> (meta, jId))
+      . Map.toList
 
+-- | An in-memory 'Queue'.
 queue :: forall job. A.Acquire (Queue job)
 queue = do
    -- tjobs: All the jobs in this 'Queue', running or not. Notice that if
    -- 'prune' removes some currently running jobs, they may be added back if
    -- requested by the 'pull' or 'retry'.
-   tjobs :: TVar (Map.Map Id (Val job)) <-
+   tjobs :: TVar (Map.Map Id (Meta, job)) <-
       R.mkAcquire1 (newTVarIO mempty) \tv ->
          -- Discard all jobs. Alive or not.
          -- TODO: Should we wait until running jobs finish?
          atomically $ writeTVar tv mempty
-   -- twork: If 'pull' couldn't find a suitable job in 'tjobs' right away,
-   -- then it'll block waiting for a STM action pushed to 'twork'. To be
-   -- applied to the 'Id' and 'Val' already marked as 'active' in 'tjobs'.
-   twork :: TVar (IntMap.IntMap ((Id, Val job) -> STM ())) <-
-      R.mkAcquire1 (newTVarIO mempty) \t ->
-         atomically $ writeTVar t mempty
-   -- shift: connect jobs ready to be executed in 'tjobs', with workers
+   -- twork: If 'pull' couldn't find a suitable job in 'tjobs' right away, then
+   -- it'll block waiting for a STM action pushed to 'twork'. To be applied to
+   -- the 'Id' and 'Meta' and @job@ already marked as 'active' in 'tjobs'.
+   twork :: TQueue (STM (Maybe ((Id, Meta, job) -> STM ()))) <-
+      R.mkAcquire1 newTQueueIO \t ->
+         atomically $ void $ flushTQueue t
+   -- connect: connect jobs ready to be executed in 'tjobs', with workers
    -- waiting for a job in 'twork'. If no job or no worker, do nothing.
-   let shift :: Time.UTCTime -> STM ()
-       shift now = fix \again -> do
-         work0 <- readTVar twork
-         forM_ (IntMap.minView work0) \(f, work1) -> do
-            jobs <- readTVar tjobs
-            forM_ (next' now jobs) \(jId, Val{..}) -> do
-               let v = Val{alive = Just now, ..}
-               modifyTVar' tjobs $ Map.insert jId v
-               writeTVar twork work1
-               f (jId, v)
-               again
-   -- This background thread perform 'shift's every 60 seconds.  Not really
-   -- necessary, just in case a timer died for some reason.
+   let connect :: Time.UTCTime -> STM ()
+       connect now = fix \again -> do
+         tryReadTQueue twork >>= traverse_ \myf ->
+            myf >>= \case
+               Nothing -> again
+               Just f -> do
+                  jobs <- readTVar tjobs
+                  case next' now jobs of
+                     Nothing -> unGetTQueue twork myf
+                     Just (jId, meta, job) -> do
+                        writeTVar tjobs $
+                           Map.insert
+                              jId
+                              ( Meta
+                                 { alive = Just now
+                                 , nice = meta.nice
+                                 , try = meta.try
+                                 , wait = meta.wait
+                                 }
+                              , job
+                              )
+                              jobs
+                        f (jId, meta, job)
+                        again
+   -- This background thread perform 'shift's every 60 seconds.
+   -- Not really necessary, just in case a timer died for some reason.
    void do
       R.mkAcquire1
          ( forkIO $ forever do
             threadDelay 60_000_000 -- 60 seconds
             now <- Time.getCurrentTime
-            atomically $ shift now
+            atomically $ connect now
          )
          (Ex.uninterruptibleMask_ . killThread)
    -- tactive: Whether the 'Queue' is still active (i.e., not vanished).
@@ -120,19 +123,15 @@ queue = do
       Queue
          { push = \nice wait job -> do
             jId <- newId
-            t0 <- Time.getCurrentTime
-            join $ atomically do
+            atomically do
                ensureActive
-               let v = Val{alive = Nothing, try = 0, nice, wait, job}
-               modifyTVar' tjobs $ Map.insert jId v
-               if wait <= t0
-                  then shift t0 >> pure (pure ())
-                  else pure do
-                     tde <- registerDelayUTCTime wait
-                     void $ Ex.mask_ $ forkIO do
-                        atomically $ readTVar tde >>= check
-                        t1 <- Time.getCurrentTime
-                        atomically $ shift t1
+               let meta = Meta{alive = Nothing, try = 0, nice, wait}
+               modifyTVar' tjobs $ Map.insert jId (meta, job)
+            tde <- registerDelayUTCTime wait
+            void $ Ex.mask_ $ forkIO do
+               atomically $ readTVar tde >>= check
+               now <- Time.getCurrentTime
+               atomically $ connect now
             pure jId
          , ---------
            prune = \f -> atomically do
@@ -140,9 +139,9 @@ queue = do
             readTVar tactive >>= \case
                False -> pure mempty -- It's alright to “fail silently”
                True -> do
-                  (!b, !m) <- prune' f <$> readTVar tjobs
+                  (!m, !a) <- prune' f <$> readTVar tjobs
                   writeTVar tjobs m
-                  pure b
+                  pure a
          , ---------
            ready = do
             now <- Time.getCurrentTime
@@ -151,49 +150,81 @@ queue = do
          , ---------
            pull = do
             -- gjob: Will block until a job is ready for being worked on.
-            gjob :: STM (Id, Val job) <- fmap snd do
+            gjob :: STM (Id, Meta, job) <- fmap snd do
                R.mkAcquire1
                   ( atomically do
                      ensureActive
-                     work0 <- readTVar twork
-                     let k = succ $ maybe minBound fst $ IntMap.lookupMax work0
-                     t <- newEmptyTMVar
-                     writeTVar twork $ IntMap.insert k (putTMVar t) work0
-                     pure (k, ensureActive >> takeTMVar t)
+                     tjob :: TMVar (Id, Meta, job) <- newEmptyTMVar
+                     twrk <- newTVar $ Just $ putTMVar tjob
+                     writeTQueue twork $ readTVar twrk
+                     pure
+                        ( writeTVar twrk Nothing
+                        , do
+                           ensureActive
+                           readTVar twrk >>= \case
+                              Just _ -> takeTMVar tjob
+                              Nothing ->
+                                 throwSTM $
+                                    resourceVanishedWithCallStack
+                                       "Job.Memory.queue/pull"
+                        )
                   )
-                  (atomically . modifyTVar' twork . IntMap.delete . fst)
+                  (atomically . fst)
             -- tout: If 'finish' is called, then @'Just' 'Nothing'@, if
             -- 'retry' is called, then @'Just' ('Just' _)@.
             tout :: TVar (Maybe (Maybe (Nice, Time.UTCTime))) <-
                liftIO $ newTVarIO Nothing
-            (jId :: Id, v :: Val job) <- do
+            (jId :: Id, meta :: Meta, job :: job) <- do
                R.mkAcquireType1
                   ( do
                      now <- Time.getCurrentTime
-                     atomically $ ensureActive >> shift now
+                     atomically $ ensureActive >> connect now
                      atomically $ gjob
                   )
-                  \(jId, v) rt -> do
-                     now <- Time.getCurrentTime
-                     atomically $
-                        readTVar tout >>= \case
-                           -- no 'retry', and no 'finish', and release with exception.
-                           Nothing | A.ReleaseExceptionWith _ <- rt -> do
-                              ensureActive
-                              let Val{job, nice} = v
-                                  alive = Nothing
-                                  try = succ v.try
-                                  wait = Time.addUTCTime autoRetryDelaySeconds now
-                              modifyTVar' tjobs $ Map.insert jId Val{..}
+                  ( \(jId, meta0, job) rt -> do
+                     ymeta1 <-
+                        readTVarIO tout >>= \case
+                           -- no 'retry', and no 'finish',
+                           -- and release with exception.
+                           Nothing
+                              | A.ReleaseExceptionWith _ <- rt -> do
+                                 now <- Time.getCurrentTime
+                                 pure $
+                                    Just $
+                                       Meta
+                                          { nice = meta0.nice
+                                          , alive = Nothing
+                                          , try = succ meta0.try
+                                          , wait =
+                                             Time.addUTCTime
+                                                autoRetryDelaySeconds
+                                                now
+                                          }
                            -- explicit 'retry'.
-                           Just (Just (nice, wait)) -> do
+                           Just (Just (nice, wait)) ->
+                              pure $
+                                 Just $
+                                    Meta
+                                       { alive = Nothing
+                                       , try = succ meta0.try
+                                       , ..
+                                       }
+                           -- explicit 'finish',
+                           -- or release without exception.
+                           _ -> pure Nothing
+                     case ymeta1 of
+                        Nothing ->
+                           atomically $ modifyTVar' tjobs $ Map.delete jId
+                        Just !meta1 -> do
+                           atomically do
                               ensureActive
-                              let Val{job} = v
-                                  alive = Nothing
-                                  try = succ v.try
-                              modifyTVar' tjobs $ Map.insert jId Val{..}
-                           -- explicit 'finish', or release without exception.
-                           _ -> modifyTVar' tjobs $ Map.delete jId
+                              modifyTVar' tjobs $ Map.insert jId (meta1, job)
+                           tde <- registerDelayUTCTime meta1.wait
+                           void $ Ex.mask_ $ forkIO do
+                              atomically $ readTVar tde >>= check
+                              now <- Time.getCurrentTime
+                              atomically $ connect now
+                  )
             -- While working on this job, send heartbeats
             void do
                R.mkAcquire1
@@ -201,10 +232,20 @@ queue = do
                      eactive <- Ex.tryAny do
                         threadDelay keepAliveBeatMicroseconds
                         now <- Time.getCurrentTime
-                        let v1 = case v of Val{..} -> Val{alive = Just now, ..}
                         atomically do
                            a <- readTVar tactive
-                           when a $ modifyTVar' tjobs $ Map.insert jId v1
+                           when a $
+                              modifyTVar' tjobs $
+                                 Map.insert
+                                    jId
+                                    ( Meta
+                                       { alive = Just now
+                                       , nice = meta.nice
+                                       , try = meta.try
+                                       , wait = meta.wait
+                                       }
+                                    , job
+                                    )
                            pure a
                      case eactive of
                         Right False -> pure ()
@@ -214,13 +255,11 @@ queue = do
             pure
                Work
                   { id = jId
+                  , job
+                  , meta
                   , retry = \n w ->
                      atomically $ writeTVar tout $ Just (Just (n, w))
                   , finish = atomically $ writeTVar tout $ Just Nothing
-                  , job = v.job
-                  , try = v.try
-                  , nice = v.nice
-                  , wait = v.wait
                   }
          }
 
