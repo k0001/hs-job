@@ -101,12 +101,12 @@ queue = do
                               jobs
                         f (jId, meta, job)
                         again
-   -- This background thread perform 'shift's every 60 seconds.
+   -- This background thread perform 'connect's every 60 seconds.
    -- Not really necessary, just in case a timer died for some reason.
    void do
       R.mkAcquire1
          ( forkIO $ forever do
-            threadDelay 60_000_000 -- 60 seconds
+            threadDelay 60_000_000
             now <- Time.getCurrentTime
             atomically $ connect now
          )

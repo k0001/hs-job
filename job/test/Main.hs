@@ -2,13 +2,17 @@
 
 module Main (main) where
 
+import Control.Concurrent
 import Control.Exception qualified as Ex
 import Control.Monad
 import Data.Acquire qualified as A
+import Data.IORef
 import Data.List qualified as List
 import Data.Time qualified as Time
 import Job
 import Job.Memory qualified
+import System.Random.Stateful qualified as R
+import System.Timeout
 
 --------------------------------------------------------------------------------
 
@@ -135,7 +139,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
          w.meta.try ==. 0
          void $ Ex.throwIO $ Err 1
 
-   putStrLn "h"
+   putStrLn "l"
    [(x6i, x6m, x6j)] <- prune q \i m j -> (True, [(i, m, j)])
    x6i ==. i2
    x6j ==. "j2"
@@ -144,19 +148,40 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    x6m.try ==. 1
    x6m.alive ==. Nothing
 
-   putStrLn "i"
+   putStrLn "m"
    i3 <- push q nice0 t0 "j3"
    i4 <- push q (pred nice0) t1 "j4"
    i5 <- push q nice0 t0 "j5"
    jIds0 <- prune q \i _ _ -> (True, [i])
    jIds0 ==. [i4, i3, i5, i2]
 
-   putStrLn "j"
+   putStrLn "n"
    forM_ (zip jIds0 (List.drop 1 (List.tails jIds0))) \(jId, tl) ->
       A.withAcquire q.pull \w -> do
          w.id ==. jId
          jIds1 <- prune q \i _ _ -> (True, [i])
          jIds1 ==. tl <> [jId]
+   [] <- prune q \i m j -> (True, [(i, m, j)])
+
+   putStrLn "o"
+   do
+      t3 <- Time.getCurrentTime
+      rwout <- newIORef ([] :: [String])
+      let wins :: [String] = fmap show [0 .. 1000 :: Word]
+      forM_ wins \win -> do
+         wrd :: Word <- R.uniformM R.globalStdGen
+         let pct = toRational wrd / toRational (maxBound :: Word)
+             ndt = fromRational (pct * 0.5)
+         push q nice0 (Time.addUTCTime ndt t3) win
+      putStrLn "o'"
+      replicateM_ 10 $ forkIO $ void $ timeout 1_000_000 $ forever do
+         A.withAcquire q.pull \w ->
+            atomicModifyIORef' rwout \xs -> (w.job : xs, ())
+      threadDelay 1_100_000
+      [] <- prune q \i m j -> (True, [(i, m, j)])
+      wout <- readIORef rwout
+      length wout ==. length wins
+      List.sort wout ==. List.sort wins
 
 data Err = Err Int
    deriving stock (Eq, Show)

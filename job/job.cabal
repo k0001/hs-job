@@ -57,5 +57,6 @@ test-suite test
   build-depends:
     base,
     job,
+    random,
     resourcet,
     time,
