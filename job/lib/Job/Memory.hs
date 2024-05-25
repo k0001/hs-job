@@ -53,7 +53,7 @@ acqEnv = do
    worker <- R.mkAcquire1 newEmptyTMVarIO \t ->
       atomically $ void $ tryTakeTMVar t
    active <- R.mkAcquire1 (newTVarIO True) \tv ->
-      atomically $ writeTVar tv False
+      atomically $ writeTVar tv False -- TODO wait until no workers running?
    pure Env{..}
 
 ensureActive :: Env job -> STM ()
@@ -132,27 +132,25 @@ queue = do
          , ---------
            prune = \f ->
             atomically do
-               readTVar env.active >>= \case
-                  False -> pure mempty -- It's alright to “fail silently”
-                  True -> do
-                     jobs0 <- readTVar env.jobs
-                     let (js, qs, a) =
-                           List.foldl'
-                              ( \(!js0, !qs0, !al) (i, (m, j)) ->
-                                 case f i m j of
-                                    (False, ar) -> (js0, qs0, al <> ar)
-                                    (True, ar) ->
-                                       ( (i, (m, j)) : js0
-                                       , maybe ((m, i) : qs0) (const qs0) m.alive
-                                       , al <> ar
-                                       )
-                              )
-                              mempty
-                              $ List.sortOn (\(i, (m, _)) -> (m, i))
-                              $ Map.toList jobs0
-                     writeTVar env.jobs $! Map.fromList js
-                     writeTVar env.queued $! Set.fromList qs
-                     pure a
+               ensureActive env
+               jobs0 <- readTVar env.jobs
+               let (js, qs, a) =
+                     List.foldl'
+                        ( \(!js0, !qs0, !al) (i, (m, j)) ->
+                           case f i m j of
+                              (False, ar) -> (js0, qs0, al <> ar)
+                              (True, ar) ->
+                                 ( (i, (m, j)) : js0
+                                 , maybe ((m, i) : qs0) (const qs0) m.alive
+                                 , al <> ar
+                                 )
+                        )
+                        mempty
+                        $ List.sortOn (\(i, (m, _)) -> (m, i))
+                        $ Map.toList jobs0
+               writeTVar env.jobs $! Map.fromList js
+               writeTVar env.queued $! Set.fromList qs
+               pure a
          , ---------
            pull = runMaybeT do
             liftIO (readTVarIO env.active) >>= \case

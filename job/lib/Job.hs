@@ -151,7 +151,8 @@ finish Work{finish = m} = liftIO m
 data Queue job = Queue
    { push :: Nice -> Time.UTCTime -> job -> IO Id
    -- ^ Push new @job@ to the queue so to be executed after the specified
-   -- 'Time.UTCTime', which may be in the past.
+   -- 'Time.UTCTime', which may be in the past. Throws if the 'Queue' has
+   -- already been released.
    , pull :: A.Acquire (Maybe (Work job))
    -- ^ Pull some 'Work' from the queue
    --
@@ -171,7 +172,8 @@ data Queue job = Queue
    -- ^ Prune @job@s from the 'Queue', keeping only those for which the given
    -- function returns 'True' (like 'List.filter'). Allows collecting some
    -- additional 'Monoid'al output.  The given @job@s are in no particular
-   -- order. __IMPORTANT:__ If you remove a @job@ that is currently active,
+   -- order. Throws if the 'Queue' has already been released.
+   -- __IMPORTANT:__ If you remove a @job@ that is currently active,
    -- it might be 'push'ed back to the 'Queue' later if required by 'retry'
    -- or a 'Work' exception.
    }
