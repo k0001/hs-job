@@ -6,13 +6,13 @@ import Control.Concurrent
 import Control.Exception qualified as Ex
 import Control.Monad
 import Data.Acquire qualified as A
+import Data.Function
 import Data.IORef
 import Data.List qualified as List
 import Data.Time qualified as Time
 import Job
 import Job.Memory qualified
 import System.Random.Stateful qualified as R
-import System.Timeout
 
 --------------------------------------------------------------------------------
 
@@ -34,12 +34,16 @@ main :: IO ()
 main = A.withAcquire (Job.Memory.queue @String) \q -> do
    t0 <- Time.getCurrentTime
 
+   Just False <- q.ready
+
    putStrLn "a"
    [] <- prune q \i m j -> (False, [(i, m, j)])
 
    putStrLn "b"
    i0 <- push q nice0 t0 "j0"
+   Just True <- q.ready
    [(x0i, x0m, x0j)] <- prune q \i m j -> (False, [(i, m, j)])
+   Just False <- q.ready
    x0i ==. i0
    x0j ==. "j0"
    x0m.nice ==. nice0
@@ -50,6 +54,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
 
    putStrLn "c"
    i1 <- push q nice0 t0 "j1"
+   Just True <- q.ready
    [(x1i, x1m, x1j)] <- prune q \i m j -> (True, [(i, m, j)])
    x1i ==. i1
    x1j ==. "j1"
@@ -69,7 +74,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
 
    putStrLn "e"
    t1 <- Time.getCurrentTime
-   A.withAcquire q.pull \w -> do
+   A.withAcquire q.pull $ mapM_ \w -> do
       putStrLn "e'"
       w.id ==. i1
       w.job ==. "j1"
@@ -77,6 +82,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
       w.meta.wait ==. t0
       w.meta.try ==. 0
       retry w (Nice 1) t1
+   Just True <- q.ready
 
    putStrLn "f"
    [(x3i, x3m, x3j)] <- prune q \i m j -> (True, [(i, m, j)])
@@ -88,7 +94,8 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    x3m.alive ==. Nothing
 
    putStrLn "g"
-   A.withAcquire q.pull \w -> do
+   Just True <- q.ready
+   A.withAcquire q.pull $ mapM_ \w -> do
       putStrLn "g'"
       w.id ==. i1
       w.job ==. "j1"
@@ -107,7 +114,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    x4m.alive ==. Nothing
 
    putStrLn "i"
-   A.withAcquire q.pull \w -> do
+   A.withAcquire q.pull $ mapM_ \w -> do
       putStrLn "i'"
       w.id ==. i1
       w.job ==. "j1"
@@ -130,7 +137,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
 
    putStrLn "k"
    Ex.handle (\case Err 1 -> pure ()) do
-      A.withAcquire q.pull \w -> do
+      A.withAcquire q.pull $ mapM_ \w -> do
          putStrLn "k'"
          w.id ==. i2
          w.job ==. "j2"
@@ -138,6 +145,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
          w.meta.wait ==. t2
          w.meta.try ==. 0
          void $ Ex.throwIO $ Err 1
+   Just False <- q.ready
 
    putStrLn "l"
    [(x6i, x6m, x6j)] <- prune q \i m j -> (True, [(i, m, j)])
@@ -157,7 +165,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
 
    putStrLn "n"
    forM_ (zip jIds0 (List.drop 1 (List.tails jIds0))) \(jId, tl) ->
-      A.withAcquire q.pull \w -> do
+      A.withAcquire q.pull $ mapM_ \w -> do
          w.id ==. jId
          jIds1 <- prune q \i _ _ -> (True, [i])
          jIds1 ==. tl <> [jId]
@@ -174,9 +182,10 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
              ndt = fromRational (pct * 0.5)
          push q nice0 (Time.addUTCTime ndt t3) win
       putStrLn "o'"
-      replicateM_ 4 $ forkIO $ void $ timeout 3_000_000 $ forever do
-         A.withAcquire q.pull \w ->
+      replicateM_ 4 $ forkIO $ fix \again -> do
+         y <- A.withAcquire q.pull $ mapM \w ->
             atomicModifyIORef' rwout \xs -> (w.job : xs, ())
+         forM_ y \_ -> again
       threadDelay 3_100_000
       [] <- prune q \i m j -> (True, [(i, m, j)])
       wout <- readIORef rwout
