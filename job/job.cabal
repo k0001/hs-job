@@ -39,14 +39,17 @@ library
     Job
     Job.Memory
   build-depends:
+    async,
     base,
     containers,
+    hashable,
+    mmzk-typeid,
     resourcet,
     resourcet-extra,
     safe-exceptions,
-    mmzk-typeid,
     stm,
     time,
+    transformers,
 
 test-suite test
   import: basic

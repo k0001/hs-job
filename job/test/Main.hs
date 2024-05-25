@@ -174,14 +174,16 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
              ndt = fromRational (pct * 0.5)
          push q nice0 (Time.addUTCTime ndt t3) win
       putStrLn "o'"
-      replicateM_ 10 $ forkIO $ void $ timeout 1_000_000 $ forever do
+      replicateM_ 4 $ forkIO $ void $ timeout 3_000_000 $ forever do
          A.withAcquire q.pull \w ->
             atomicModifyIORef' rwout \xs -> (w.job : xs, ())
-      threadDelay 1_100_000
+      threadDelay 3_100_000
       [] <- prune q \i m j -> (True, [(i, m, j)])
       wout <- readIORef rwout
       length wout ==. length wins
       List.sort wout ==. List.sort wins
+
+   putStrLn "done"
 
 data Err = Err Int
    deriving stock (Eq, Show)

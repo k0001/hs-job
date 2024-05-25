@@ -29,6 +29,7 @@ module Job
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Acquire qualified as A
+import Data.Hashable
 import Data.Int
 import Data.Time qualified as Time
 import Data.UUID.V7 (UUID)
@@ -65,7 +66,7 @@ newtype Id
    = -- | Unsafe because there's no guarantee that the UUID is V7,
      -- which this library expects. Use 'idFromUUID7' if possible.
      UnsafeId UUID
-   deriving newtype (Eq, Ord, Show)
+   deriving newtype (Eq, Ord, Show, Hashable)
 
 instance HasField "uuid7" Id UUID where
    getField (UnsafeId u) = u

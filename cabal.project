@@ -1,4 +1,5 @@
-profiling: False
+profiling: True
+profiling-detail: toplevel-functions
 optimization: True
 documentation: True
 benchmarks: False
