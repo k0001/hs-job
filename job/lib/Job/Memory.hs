@@ -154,17 +154,6 @@ queue = do
                      writeTVar env.queued $! Set.fromList qs
                      pure a
          , ---------
-           ready = join $ atomically do
-            readTVar env.active >>= \case
-               False -> pure (pure Nothing)
-               True -> do
-                  q <- readTVar env.queued
-                  case Set.lookupMin q of
-                     Nothing -> pure (pure (Just False))
-                     Just (m, _) -> pure do
-                        now <- Time.getCurrentTime
-                        pure (Just (m.wait <= now))
-         , ---------
            pull = runMaybeT do
             liftIO (readTVarIO env.active) >>= \case
                False -> MaybeT $ pure Nothing

@@ -34,16 +34,12 @@ main :: IO ()
 main = A.withAcquire (Job.Memory.queue @String) \q -> do
    t0 <- Time.getCurrentTime
 
-   Just False <- q.ready
-
    putStrLn "a"
    [] <- prune q \i m j -> (False, [(i, m, j)])
 
    putStrLn "b"
    i0 <- push q nice0 t0 "j0"
-   Just True <- q.ready
    [(x0i, x0m, x0j)] <- prune q \i m j -> (False, [(i, m, j)])
-   Just False <- q.ready
    x0i ==. i0
    x0j ==. "j0"
    x0m.nice ==. nice0
@@ -54,7 +50,6 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
 
    putStrLn "c"
    i1 <- push q nice0 t0 "j1"
-   Just True <- q.ready
    [(x1i, x1m, x1j)] <- prune q \i m j -> (True, [(i, m, j)])
    x1i ==. i1
    x1j ==. "j1"
@@ -82,7 +77,6 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
       w.meta.wait ==. t0
       w.meta.try ==. 0
       retry w (Nice 1) t1
-   Just True <- q.ready
 
    putStrLn "f"
    [(x3i, x3m, x3j)] <- prune q \i m j -> (True, [(i, m, j)])
@@ -94,7 +88,6 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    x3m.alive ==. Nothing
 
    putStrLn "g"
-   Just True <- q.ready
    A.withAcquire q.pull $ mapM_ \w -> do
       putStrLn "g'"
       w.id ==. i1
@@ -145,7 +138,6 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
          w.meta.wait ==. t2
          w.meta.try ==. 0
          void $ Ex.throwIO $ Err 1
-   Just False <- q.ready
 
    putStrLn "l"
    [(x6i, x6m, x6j)] <- prune q \i m j -> (True, [(i, m, j)])
