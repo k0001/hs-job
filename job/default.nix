@@ -4,7 +4,7 @@
 }:
 mkDerivation {
   pname = "job";
-  version = "0.1";
+  version = "0.1.1";
   src = ./.;
   libraryHaskellDepends = [
     async base containers hashable mmzk-typeid resourcet
