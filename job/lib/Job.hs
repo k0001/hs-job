@@ -153,13 +153,10 @@ data Queue job = Queue
    -- ^ Push new @job@ to the queue so to be executed after the specified
    -- 'Time.UTCTime', which may be in the past. Throws if the 'Queue' has
    -- already been released.
-   , pull :: A.Acquire (Maybe (Work job))
+   , pull :: A.Acquire (Work job)
    -- ^ Pull some 'Work' from the queue
    --
-   -- * If the 'Queue' itself has been released, then returns 'Nothing'
-   -- right away.
-   --
-   -- * Otherwise, blocks until 'Work' is available.
+   -- * Blocks until 'Work' is available.
    --
    -- * On 'A.ReleaseExceptionWith', the @job@ is automatically rescheduled
    -- for re-execution after a few seconds. This behavior can be overriden

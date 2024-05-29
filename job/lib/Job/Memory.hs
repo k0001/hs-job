@@ -9,8 +9,6 @@ import Control.Concurrent.STM
 import Control.Exception.Safe qualified as Ex
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.Maybe (MaybeT (..), runMaybeT)
 import Control.Monad.Trans.Resource.Extra qualified as R
 import Control.Monad.Trans.State.Strict (put, runStateT)
 import Data.Acquire qualified as A
@@ -103,6 +101,8 @@ connectMany env = fmap ($ []) (go id)
          Just i -> go ((i :) . f)
          Nothing -> pure f
 
+data Exit = ExitDefault | ExitFinish | ExitRetry Nice Time.UTCTime
+
 -- | An in-memory 'Queue'.
 queue :: forall job. A.Acquire (Queue job)
 queue = do
@@ -152,63 +152,45 @@ queue = do
                writeTVar env.queued $! Set.fromList qs
                pure a
          , ---------
-           pull = runMaybeT do
-            liftIO (readTVarIO env.active) >>= \case
-               False -> MaybeT $ pure Nothing
-               True -> pure ()
-            tout :: TVar (Maybe (Maybe (Nice, Time.UTCTime))) <-
-               liftIO $ newTVarIO Nothing
-            (i :: Id, meta :: Meta, job :: job) <- MaybeT do
+           pull = do
+            (i :: Id, meta :: Meta, job :: job, te :: TVar Exit) <- do
                R.mkAcquireType1
                   ( do
                      k0 <- UUID7.genUUID
                      Ex.bracketOnError
                         ( atomically do
-                           readTVar env.active >>= \case
-                              False -> pure Nothing
-                              True -> do
-                                 tj <- newEmptyTMVar
-                                 -- Blocks until we become next worker
-                                 putTMVar env.worker (k0, putTMVar tj)
-                                 pure (Just tj)
+                           ensureActive env
+                           tj <- newEmptyTMVar
+                           -- Blocks until we become next worker
+                           putTMVar env.worker (k0, putTMVar tj)
+                           pure tj
                         )
-                        ( mapM_ \_ -> atomically do
+                        ( \_ -> atomically do
                            tryTakeTMVar env.worker >>= \case
                               Just (k1, f)
-                                 | k0 /= k1 ->
-                                    putTMVar env.worker (k1, f)
+                                 | k0 /= k1 -> putTMVar env.worker (k1, f)
                               _ -> pure ()
                         )
-                        ( \case
-                           Nothing -> pure Nothing
-                           Just tj -> atomically do
-                              readTVar env.active >>= \case
-                                 False -> pure Nothing
-                                 True ->
-                                    -- Blocks until we get job input
-                                    Just <$> takeTMVar tj
+                        ( \tj -> atomically do
+                           ensureActive env
+                           -- Blocks until we get job input
+                           (i, m, j) <- takeTMVar tj
+                           te <- newTVar ExitDefault
+                           pure (i, m, j, te)
                         )
                   )
-                  ( \yx rt -> forM_ yx \(i, m0, job) -> do
+                  ( \(i, m0, job, te) rt -> do
                      ym1 <-
-                        readTVarIO tout >>= \case
-                           -- no 'retry', and no 'finish',
-                           -- and release with exception.
-                           Nothing
-                              | A.ReleaseExceptionWith _ <- rt -> do
-                                 now <- Time.getCurrentTime
-                                 let alive = Nothing
-                                     try = succ m0.try
-                                     nice = m0.nice
-                                     wait = Time.addUTCTime retryDelay now
-                                 pure $ Just Meta{..}
-                           -- explicit 'retry'.
-                           Just (Just (nice, wait)) -> do
-                              let alive = Nothing
-                                  try = succ m0.try
-                              pure $ Just Meta{..}
-                           -- explicit 'finish',
-                           -- or release without exception.
+                        readTVarIO te >>= \case
+                           ExitDefault | A.ReleaseExceptionWith _ <- rt -> do
+                              now <- Time.getCurrentTime
+                              let try = succ m0.try
+                                  nice = m0.nice
+                                  wait = Time.addUTCTime retryDelay now
+                              pure $ Just Meta{alive = Nothing, ..}
+                           ExitRetry nice wait -> do
+                              let try = succ m0.try
+                              pure $ Just Meta{alive = Nothing, ..}
                            _ -> pure Nothing
                      case ym1 of
                         Nothing ->
@@ -224,7 +206,7 @@ queue = do
                               void $ connectMany env
                   )
             -- While working on this job, send heartbeats
-            void $ lift do
+            void do
                R.mkAcquire1
                   ( As.async $ fix \again -> do
                      eactive <- Ex.tryAny do
@@ -249,9 +231,9 @@ queue = do
                   { id = i
                   , job
                   , meta
-                  , retry = \n w ->
-                     atomically $ writeTVar tout $ Just (Just (n, w))
-                  , finish = atomically $ writeTVar tout $ Just Nothing
+                  , retry = \nice wait ->
+                     atomically $ writeTVar te $ ExitRetry nice wait
+                  , finish = atomically $ writeTVar te ExitFinish
                   }
          }
 
