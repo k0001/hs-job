@@ -2,19 +2,18 @@
   description = "Haskell 'job' library";
 
   inputs = {
-    flakety.url = "github:k0001/flakety/d5262bc8bbed901ad2e0bec59904b60d9a5e28df";
+    flakety.url =
+      "github:k0001/flakety/d5262bc8bbed901ad2e0bec59904b60d9a5e28df";
     nixpkgs.follows = "flakety/nixpkgs";
     flake-parts.follows = "flakety/flake-parts";
-    hs_resourcet-extra.url =
-      "github:k0001/hs-resourcet-extra/8b05ef384b628e66c0c6742e40290cb06aaca13a";
-    hs_resourcet-extra.inputs.flakety.follows = "flakety";
+    hs_sq.url = "github:k0001/hs-sq.git";
+    hs_sq.inputs.flakety.follows = "flakety";
   };
 
   outputs = inputs@{ ... }:
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       flake.overlays.default = inputs.nixpkgs.lib.composeManyExtensions [
-        inputs.flakety.overlays.default
-        inputs.hs_resourcet-extra.overlays.default
+        inputs.hs_sq.overlays.default
         (final: prev:
           let
             hsLib = prev.haskell.lib;
@@ -28,6 +27,10 @@
                   prev.lib.optionalAttrs
                   (prev.lib.versionAtLeast hprev.ghc.version "9.6") {
                     job = hsLib.doBenchmark (hfinal.callPackage ./job { });
+                    #job-hasql =
+                    #  hsLib.doBenchmark (hfinal.callPackage ./job-hasql { });
+                    job-sq =
+                      hsLib.doBenchmark (hfinal.callPackage ./job-sq { });
                   });
             };
           })
@@ -44,6 +47,16 @@
             pkgs.haskell.packages.ghc98.cabalSdist { src = ./job; };
           job__ghc98__sdistDoc =
             pkgs.haskell.lib.documentationTarball config.packages.job__ghc98;
+          job-sq__ghc98 = pkgs.haskell.packages.ghc98.job-sq;
+          job-sq__ghc98__sdist =
+            pkgs.haskell.packages.ghc98.cabalSdist { src = ./job-sq; };
+          job-sq__ghc98__sdistDoc =
+            pkgs.haskell.lib.documentationTarball config.packages.job-sq__ghc98;
+          #job-hasql__ghc98 = pkgs.haskell.packages.ghc98.job-hasql;
+          #job-hasql__ghc98__sdist =
+          #  pkgs.haskell.packages.ghc98.cabalSdist { src = ./job-hasql; };
+          #job-hasql__ghc98__sdistDoc = pkgs.haskell.lib.documentationTarball
+          #  config.packages.job-hasql__ghc98;
           default = pkgs.releaseTools.aggregate {
             name = "every output from this flake";
             constituents = [
@@ -51,6 +64,14 @@
               config.packages.job__ghc98.doc
               config.packages.job__ghc98__sdist
               config.packages.job__ghc98__sdistDoc
+              config.packages.job-sq__ghc98
+              config.packages.job-sq__ghc98.doc
+              config.packages.job-sq__ghc98__sdist
+              config.packages.job-sq__ghc98__sdistDoc
+              #config.packages.job-hasql__ghc98
+              #config.packages.job-hasql__ghc98.doc
+              #config.packages.job-hasql__ghc98__sdist
+              #config.packages.job-hasql__ghc98__sdistDoc
               config.devShells.ghc98
             ];
           };
@@ -58,14 +79,14 @@
         devShells = let
           mkShellFor = ghc:
             ghc.shellFor {
-              packages = p: [ p.job ];
+              packages = p: [
+                p.job
+                p.job-sq # p.job-hasql
+              ];
               doBenchmark = true;
               withHoogle = true;
-              nativeBuildInputs = [
-                pkgs.cabal-install
-                pkgs.cabal2nix
-                pkgs.ghcid
-              ];
+              nativeBuildInputs =
+                [ pkgs.cabal-install pkgs.cabal2nix pkgs.ghcid ];
             };
         in {
           default = config.devShells.ghc98;

@@ -280,17 +280,37 @@
         "type": "github"
       }
     },
+    "hs_direct-sqlite": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1706291448,
+        "narHash": "sha256-0B6UuBMMY0PXV1WKrfSEsQ6ndTr/J6oZ5ZI0IzlyV4E=",
+        "owner": "IreneKnapp",
+        "repo": "direct-sqlite",
+        "rev": "15528503e2a53a87c50d66f52032bda5058d46f7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "IreneKnapp",
+        "repo": "direct-sqlite",
+        "rev": "15528503e2a53a87c50d66f52032bda5058d46f7",
+        "type": "github"
+      }
+    },
     "hs_resourcet-extra": {
       "inputs": {
         "flake-parts": [
+          "hs_sq",
           "hs_resourcet-extra",
           "flakety",
           "flake-parts"
         ],
         "flakety": [
+          "hs_sq",
           "flakety"
         ],
         "nixpkgs": [
+          "hs_sq",
           "hs_resourcet-extra",
           "flakety",
           "nixpkgs"
@@ -309,6 +329,38 @@
         "repo": "hs-resourcet-extra",
         "rev": "8b05ef384b628e66c0c6742e40290cb06aaca13a",
         "type": "github"
+      }
+    },
+    "hs_sq": {
+      "inputs": {
+        "flake-parts": [
+          "hs_sq",
+          "flakety",
+          "flake-parts"
+        ],
+        "flakety": [
+          "flakety"
+        ],
+        "hs_direct-sqlite": "hs_direct-sqlite",
+        "hs_resourcet-extra": "hs_resourcet-extra",
+        "nixpkgs": [
+          "hs_sq",
+          "flakety",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1717072726,
+        "narHash": "sha256-sxyqhrtrSN2ACX1ekrdOgKQkrKpKwO3SRBOk/LdHV7I=",
+        "ref": "refs/heads/master",
+        "rev": "927a03cbac073e97444aa648832a5801a5c3da2d",
+        "revCount": 82,
+        "type": "git",
+        "url": "file:///home/k/q/hs-sq.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///home/k/q/hs-sq.git"
       }
     },
     "nixpkgs": {
@@ -386,7 +438,7 @@
           "flake-parts"
         ],
         "flakety": "flakety",
-        "hs_resourcet-extra": "hs_resourcet-extra",
+        "hs_sq": "hs_sq",
         "nixpkgs": [
           "flakety",
           "nixpkgs"
