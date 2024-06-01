@@ -6,7 +6,7 @@
       "github:k0001/flakety/d5262bc8bbed901ad2e0bec59904b60d9a5e28df";
     nixpkgs.follows = "flakety/nixpkgs";
     flake-parts.follows = "flakety/flake-parts";
-    hs_sq.url = "github:k0001/hs-sq.git";
+    hs_sq.url = "github:k0001/hs-sq";
     hs_sq.inputs.flakety.follows = "flakety";
   };
 

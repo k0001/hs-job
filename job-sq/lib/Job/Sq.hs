@@ -162,24 +162,31 @@ stHasNext =
       ("out" <&> \(n :: Int) -> n > 0)
       [Sq.sql|
        SELECT count(*) AS out
-       FROM job
-       WHERE alive IS NULL AND wait <= $now
-       LIMIT 1
+       FROM (SELECT rowid
+             FROM job
+             WHERE alive IS NULL AND wait <= $now
+             LIMIT 1)
       |]
 
-stNext
+stStartNext
    :: (Ae.FromJSON job)
-   => Sq.Statement 'Sq.Read Time.UTCTime (Id, Meta, job)
-stNext =
-   Sq.readStatement
+   => Sq.Statement 'Sq.Write Time.UTCTime (Id, Meta, job)
+stStartNext =
+   Sq.writeStatement
       "now"
       outIdMetaJob
       [Sq.sql|
-       SELECT id, nice, wait, try, alive, job
-       FROM job
-       WHERE alive IS NULL AND wait <= $now
-       ORDER BY nice, wait, try, id, rowid
-       LIMIT 1
+       WITH jnext AS (
+         SELECT rowid
+         FROM job
+         WHERE alive IS NULL AND wait <= $now
+         ORDER BY nice, wait, try, id, rowid
+         LIMIT 1)
+       UPDATE job AS j
+       SET alive = $now
+       FROM jnext
+       WHERE j.rowid = jnext.rowid
+       RETURNING id, nice, wait, try, $now AS alive, job
       |]
 
 stPrune :: (Ae.FromJSON job) => Sq.Statement 'Sq.Read () (Id, Meta, job)
@@ -208,12 +215,15 @@ queue
    -> Queue job
 queue db =
    Queue
-      { push = \nice wait job -> do
-         ji <- newId
-         Sq.commit db do
-            let m = Meta{alive = Nothing, try = 0, ..}
-            _ <- Sq.one stInsert (ji, m, job)
-            pure ji
+      { push = \case
+         [] -> pure []
+         xs0 -> do
+            xs1 <- forM xs0 \(nice, wait, job) -> do
+               let !m = Meta{nice, wait, alive = Nothing, try = 0}
+               ji <- newId
+               pure (ji, m, job)
+            Sq.commit db $ mapM_ (Sq.one stInsert) xs1
+            pure $ fmap (\(ji, _, _) -> ji) xs1
       , pull = do
          tye <- liftIO $ newTVarIO $ Just ExitDefault
          (ji, meta, job) <-
@@ -231,11 +241,7 @@ queue db =
                            Sq.one stHasNext t0 <&> \case
                               True -> Just ()
                               False -> Nothing
-                        MaybeT $ Sq.commit db do
-                           Sq.maybe stNext t0 >>= traverse \(ji, Meta{..}, job) -> do
-                              let m1 = Meta{alive = Just t0, ..}
-                              void $ Sq.one stHeartbeat (ji, Just t0)
-                              pure (ji, m1, job)
+                        MaybeT $ Sq.commit db $ Sq.maybe stStartNext t0
                )
                ( \(ji, m0, job0) rt -> do
                   exit <- atomically do

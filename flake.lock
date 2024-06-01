@@ -350,17 +350,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1717072726,
-        "narHash": "sha256-sxyqhrtrSN2ACX1ekrdOgKQkrKpKwO3SRBOk/LdHV7I=",
-        "ref": "refs/heads/master",
-        "rev": "927a03cbac073e97444aa648832a5801a5c3da2d",
-        "revCount": 82,
-        "type": "git",
-        "url": "file:///home/k/q/hs-sq.git"
+        "lastModified": 1717253138,
+        "narHash": "sha256-XZSbeOwyGPBOpNaSyIWKMoeuodfJL7EAilU8p0f/yU4=",
+        "owner": "k0001",
+        "repo": "hs-sq",
+        "rev": "2e0773c826001633434421dfc6409292023a1878",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "file:///home/k/q/hs-sq.git"
+        "owner": "k0001",
+        "repo": "hs-sq",
+        "type": "github"
       }
     },
     "nixpkgs": {
