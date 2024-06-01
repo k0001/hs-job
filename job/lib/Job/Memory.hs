@@ -13,10 +13,12 @@ import Control.Monad.Trans.Resource.Extra qualified as R
 import Control.Monad.Trans.State.Strict (put, runStateT)
 import Data.Acquire qualified as A
 import Data.Fixed
+import Data.Foldable (foldMap')
 import Data.Function
 import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Monoid (Endo (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Time qualified as Time
@@ -118,17 +120,27 @@ queue = do
          As.uninterruptibleCancel
    pure
       Queue
-         { push = \nice wait job -> do
-            let m = Meta{nice, wait, alive = Nothing, try = 0}
-            i <- newId
-            atomically do
-               ensureActive env
-               modifyTVar' env.jobs $ Map.insert i (m, job)
-               modifyTVar' env.queued $ Set.insert (m, i)
-            void $ As.async do
-               threadDelayUTCTime wait
-               void $ connectMany env
-            pure i
+         { push = \case
+            [] -> pure []
+            xs0 -> do
+               xs1 <- forM xs0 \(nice, wait, job) -> do
+                  let !m = Meta{nice, wait, alive = Nothing, try = 0}
+                  ji <- newId
+                  pure (ji, m, job)
+               let (Endo !fj, Endo !fq) = flip foldMap' xs1 \(ji, m, job) ->
+                     ( Endo (Map.insert ji (m, job))
+                     , Endo (Set.insert (m, ji))
+                     )
+               atomically do
+                  ensureActive env
+                  modifyTVar' env.jobs fj
+                  modifyTVar' env.queued fq
+               void $ As.async do
+                  forM_ xs1 \(_, m, _) -> do
+                     void $ As.async do
+                        threadDelayUTCTime m.wait
+                        void $ connectMany env
+               pure $ fmap (\(ji, _, _) -> ji) xs1
          , ---------
            prune = \f ->
             atomically do

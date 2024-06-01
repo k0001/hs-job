@@ -37,7 +37,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    [] <- prune q \i m j -> (False, [(i, m, j)])
 
    putStrLn "b"
-   i0 <- push q nice0 t0 "j0"
+   [i0] <- push q [(nice0, t0, "j0")]
    [(x0i, x0m, x0j)] <- prune q \i m j -> (False, [(i, m, j)])
    x0i ==. i0
    x0j ==. "j0"
@@ -48,7 +48,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    [] <- prune q \i m j -> (False, [(i, m, j)])
 
    putStrLn "c"
-   i1 <- push q nice0 t0 "j1"
+   [i1] <- push q [(nice0, t0, "j1")]
    [(x1i, x1m, x1j)] <- prune q \i m j -> (True, [(i, m, j)])
    x1i ==. i1
    x1j ==. "j1"
@@ -118,7 +118,7 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    putStrLn "j"
    [] <- prune q \i m j -> (True, [(i, m, j)])
    t2 <- Time.addUTCTime 0.3 <$> Time.getCurrentTime
-   i2 <- push q nice0 t2 "j2"
+   [i2] <- push q [(nice0, t2, "j2")]
    [(x5i, x5m, x5j)] <- prune q \i m j -> (True, [(i, m, j)])
    x5i ==. i2
    x5j ==. "j2"
@@ -148,9 +148,13 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
    x6m.alive ==. Nothing
 
    putStrLn "m"
-   i3 <- push q nice0 t0 "j3"
-   i4 <- push q (pred nice0) t1 "j4"
-   i5 <- push q nice0 t0 "j5"
+   [i3, i4, i5] <-
+      push
+         q
+         [ (nice0, t0, "j3")
+         , (pred nice0, t1, "j4")
+         , (nice0, t0, "j5")
+         ]
    jIds0 <- prune q \i _ _ -> (True, [i])
    jIds0 ==. [i4, i3, i5, i2]
 
@@ -167,11 +171,11 @@ main = A.withAcquire (Job.Memory.queue @String) \q -> do
       t3 <- Time.getCurrentTime
       rwout <- newIORef ([] :: [String])
       let wins :: [String] = fmap show [0 .. 1000 :: Word]
-      forM_ wins \win -> do
-         wrd :: Word <- R.uniformM R.globalStdGen
-         let pct = toRational wrd / toRational (maxBound :: Word)
-             ndt = fromRational (pct * 0.5)
-         push q nice0 (Time.addUTCTime ndt t3) win
+      void $
+         push q =<< forM wins \win -> do
+            wrd :: Word <- R.uniformM R.globalStdGen
+            let pct = toRational wrd / toRational (maxBound :: Word)
+            pure (nice0, Time.addUTCTime (fromRational pct) t3, win)
       putStrLn "o'"
       tIds <- replicateM 4 $ forkIO $ forever do
          A.withAcquire q.pull \w ->

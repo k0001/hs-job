@@ -149,10 +149,11 @@ finish Work{finish = m} = liftIO m
 --
 -- * Other backends are expected to provide a 'Queue' implementation.
 data Queue job = Queue
-   { push :: Nice -> Time.UTCTime -> job -> IO Id
-   -- ^ Push new @job@ to the queue so to be executed after the specified
+   { push :: [(Nice, Time.UTCTime, job)] -> IO [Id]
+   -- ^ Push new @job@s to the queue so to be executed after the specified
    -- 'Time.UTCTime', which may be in the past. Throws if the 'Queue' has
-   -- already been released.
+   -- already been released. Returns the newly assigned 'Id's in the same
+   -- order as the given input.
    , pull :: A.Acquire (Work job)
    -- ^ Pull some 'Work' from the queue
    --
@@ -181,11 +182,9 @@ push
    :: forall job m
     . (MonadIO m)
    => Queue job
-   -> Nice
-   -> Time.UTCTime
-   -> job
-   -> m Id
-push Queue{push = f} n t j = liftIO $ f n t j
+   -> [(Nice, Time.UTCTime, job)]
+   -> m [Id]
+push Queue{push = f} xs = liftIO (f xs)
 
 -- | Like the 'prune' field in 'Queue', except with a bit more polymorphic type
 -- and intended to be used as a top-level function.
